@@ -601,6 +601,27 @@ describe("stable exported function bindings through stdio MCP", () => {
       expected: "unknown",
     },
     {
+      name: "a callable initialized in a later block",
+      source: (count: number) =>
+        `export default run;\n{ var run = () => ({ kind: "result", count: ${String(count)} }); }`,
+      runtimeValue: () => undefined,
+      expected: "unknown",
+    },
+    {
+      name: "an alias captured before a later block initializer",
+      source: (count: number) =>
+        `const captured = run;\nexport default captured;\n{ var run = () => ({ kind: "result", count: ${String(count)} }); }`,
+      runtimeValue: () => undefined,
+      expected: "unknown",
+    },
+    {
+      name: "a hoisted function captured before its declaration",
+      source: (count: number) =>
+        `export default run;\nfunction run() { return { kind: "result", count: ${String(count)} }; }`,
+      runtimeValue: (count: number) => ({ kind: "result", count }),
+      expected: "known",
+    },
+    {
       name: "a reassignment after the default export capture",
       source: (count: number) =>
         `let run = () => ({ kind: "result", count: ${String(count)} });\nexport default run;\nrun = () => ({ count: 99 });`,

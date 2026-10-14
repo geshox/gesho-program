@@ -28,7 +28,10 @@ import { evaluateSemanticExpression } from "./javascriptSemanticValues.js";
 import { range } from "./javascriptStaticAnalysisHelpers.js";
 import { semanticReturnCoverage } from "./javascriptSemanticCoverage.js";
 import { semanticCallableResultExpressions } from "./javascriptSemanticCallableResults.js";
-import { semanticReadInitializers } from "./javascriptSemanticMutationInitializers.js";
+import {
+  semanticInitializerAvailableAtRead,
+  semanticReadInitializers,
+} from "./javascriptSemanticMutationInitializers.js";
 
 interface ReturnExpression {
   readonly node: t.Node | null;
@@ -167,7 +170,13 @@ const callableIdsForBinding = (
     initializer === undefined ||
     selected.initializers.length !== 1 ||
     initializer.projection.length > 0 ||
-    state.conditionallySkippedExpressions.has(initializer.node)
+    state.conditionallySkippedExpressions.has(initializer.node) ||
+    (read !== undefined &&
+      !semanticInitializerAvailableAtRead(
+        initializer.node,
+        read,
+        state.parentsByNode,
+      ))
   )
     return [];
   return callableIdsForNode(

@@ -22,6 +22,7 @@ interface InitializerPositionCache {
   readonly direct: WeakMap<t.Node, StatementPosition | null>;
   readonly mutation: WeakMap<t.Node, StatementPosition | null>;
   readonly reference: WeakMap<t.Node, StatementPosition | null>;
+  readonly read: WeakMap<t.Node, StatementPosition | null>;
 }
 
 const initializerPositionCaches = new WeakMap<
@@ -38,6 +39,7 @@ const initializerPositionCache = (
     direct: new WeakMap(),
     mutation: new WeakMap(),
     reference: new WeakMap(),
+    read: new WeakMap(),
   };
   initializerPositionCaches.set(parents, created);
   return created;
@@ -292,6 +294,55 @@ const referenceInitializerPosition = (
   return computed;
 };
 
+const readInitializerPosition = (
+  read: t.Node,
+  parents: WeakMap<t.Node, t.Node>,
+): StatementPosition | null => {
+  const cache = initializerPositionCache(parents);
+  const cached = cache.read.get(read);
+  if (cached !== undefined) return cached;
+  let position: StatementPosition | null = null;
+  let current = read;
+  for (
+    let parent = parents.get(current);
+    parent;
+    parent = parents.get(current)
+  ) {
+    if (t.isLoop(parent)) {
+      position = null;
+      break;
+    }
+    if (t.isFunction(parent)) break;
+    if (position === null) {
+      if (t.isVariableDeclarator(parent)) {
+        const declaration = parents.get(parent);
+        if (t.isVariableDeclaration(declaration))
+          position = statementPosition(declaration, parents, parent);
+      } else if (t.isStatement(parent))
+        position = statementPosition(parent, parents);
+    }
+    current = parent;
+  }
+  cache.read.set(read, position);
+  return position;
+};
+
+/** Prove a captured value is initialized, without treating possible origins as readiness. */
+export const semanticInitializerAvailableAtRead = (
+  initializer: t.Node,
+  read: t.Node,
+  parents: WeakMap<t.Node, t.Node>,
+): boolean => {
+  if (t.isFunctionDeclaration(initializer)) return true;
+  const initialized = directInitializerPosition(initializer, parents);
+  const captured = readInitializerPosition(read, parents);
+  return (
+    initialized !== null &&
+    captured !== null &&
+    positionPrecedes(initialized, captured)
+  );
+};
+
 /** Resolve origins at their use or capture, never at a later transitive effect. */
 export const semanticMutationInitializers = (
   binding: JavaScriptSemanticBindingState,
@@ -367,28 +418,13 @@ export const semanticReadInitializers = (
 ): Pick<
   JavaScriptSemanticBindingState,
   "initializers" | "referenceInitializers"
-> => {
-  let position: StatementPosition | null = null;
-  let current = read;
-  for (
-    let parent = parents.get(current);
-    parent;
-    parent = parents.get(current)
-  ) {
-    if (t.isLoop(parent)) return binding;
-    if (t.isFunction(parent)) break;
-    if (position === null) {
-      if (t.isVariableDeclarator(parent)) {
-        const declaration = parents.get(parent);
-        if (t.isVariableDeclaration(declaration))
-          position = statementPosition(declaration, parents, parent);
-      } else if (t.isStatement(parent))
-        position = statementPosition(parent, parents);
-    }
-    current = parent;
-  }
-  return selectInitializers(binding, position, parents, true);
-};
+> =>
+  selectInitializers(
+    binding,
+    readInitializerPosition(read, parents),
+    parents,
+    true,
+  );
 
 const selectInitializers = (
   binding: JavaScriptSemanticBindingState,
