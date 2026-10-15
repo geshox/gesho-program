@@ -379,9 +379,14 @@ function* analyzeArtifactFileSteps<
     state.parseFailures += 1;
     return;
   }
+  const staticImportResolutionMode = moduleResolutionModeForJavaScriptReference(
+    file.path,
+    "static-import",
+  );
   const analysis = yield* analyzeParsedJavaScriptStaticSourceSteps(
     file.text.value,
     parsed,
+    staticImportResolutionMode,
   );
   const staticFindings = findingCount(analysis);
   yield;
@@ -389,10 +394,7 @@ function* analyzeArtifactFileSteps<
     analysis.parse_status === "complete" || analysis.parse_status === "partial"
       ? yield* analyzeParsedJavaScriptSemanticsSteps(
           parsed,
-          moduleResolutionModeForJavaScriptReference(
-            file.path,
-            "static-import",
-          ),
+          staticImportResolutionMode,
         )
       : null;
   const projected =

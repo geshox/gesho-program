@@ -1,4 +1,6 @@
+import type { JavaScriptModuleResolutionMode } from "./javascriptModuleResolutionMode.js";
 import * as t from "@babel/types";
+import { typescriptImportResolutionMode } from "./typescriptImportResolutionMode.js";
 import { collectElectronWrappedCallPaths } from "./electronWrappedCallPaths.js";
 import {
   ELECTRON_IDENTITY_LIMITATION,
@@ -46,6 +48,7 @@ import {
 } from "./javascriptSemanticAnalysis.js";
 import {
   parseJavaScriptSource,
+  parsedJSDocTypeImports,
   type ParsedJavaScriptSource,
 } from "./javascriptSourceParser.js";
 
@@ -71,13 +74,21 @@ export const analyzeJavaScriptStaticSource = (
 export const analyzeParsedJavaScriptStaticSource = (
   source: string,
   file: ParsedJavaScriptSource,
+  staticImportResolutionMode: JavaScriptModuleResolutionMode = "import",
 ): JavaScriptStaticAnalysis =>
-  completeSemanticSteps(analyzeParsedJavaScriptStaticSourceSteps(source, file));
+  completeSemanticSteps(
+    analyzeParsedJavaScriptStaticSourceSteps(
+      source,
+      file,
+      staticImportResolutionMode,
+    ),
+  );
 
 /** Static analysis that yields during its source traversal; results are unchanged. */
 export function* analyzeParsedJavaScriptStaticSourceSteps(
   source: string,
   file: ParsedJavaScriptSource,
+  staticImportResolutionMode: JavaScriptModuleResolutionMode = "import",
 ): Generator<void, JavaScriptStaticAnalysis> {
   const accumulator = createJavaScriptAnalysisAccumulator(source.length);
   // One definitions pass serves receiver classification and binding lookup.
@@ -87,18 +98,21 @@ export function* analyzeParsedJavaScriptStaticSourceSteps(
     file.program,
     bindings,
   );
-  yield* traverseStaticSourceSteps(
-    file,
-    {
-      source,
-      accumulator,
-      vitePreloadDependencyTable: indexVitePreloadDependencyTable(file.program),
-      openReceiverFacts: receivers.openReceivers,
-      electronBindings: electronIdentity.bindings,
-      rpcScan: createJavaScriptRpcScan(source, receivers.rpcClientRoots),
-    },
-    bindings,
-  );
+  const findings: JavaScriptFindingContext = {
+    source,
+    accumulator,
+    staticImportResolutionMode,
+    parentsByNode: bindings.parentsByNode,
+    vitePreloadDependencyTable: indexVitePreloadDependencyTable(file.program),
+    openReceiverFacts: receivers.openReceivers,
+    electronBindings: electronIdentity.bindings,
+    rpcScan: createJavaScriptRpcScan(source, receivers.rpcClientRoots),
+  };
+  yield* traverseStaticSourceSteps(file, findings, bindings);
+  const typeImports = parsedJSDocTypeImports(file.program);
+  for (const declaration of typeImports.declarations)
+    inspectNode(declaration, findings, bindings);
+  if (!typeImports.complete) accumulator.unknownFindings += 1;
   accumulator.electronCallPaths = collectElectronWrappedCallPaths(
     file.program,
     bindings,
@@ -232,7 +246,12 @@ const inspectNode = (
   bindings: JavaScriptSemanticAnalysisState,
 ): void => {
   const { source, accumulator } = findings;
-  inspectElectronStaticNode(node, findings);
+  const resolutionMode = typescriptImportResolutionMode(node);
+  inspectElectronStaticNode(
+    node,
+    findings,
+    resolutionMode ?? findings.staticImportResolutionMode,
+  );
   if (t.isCallExpression(node)) {
     inspectBundlerBootstrap(source, node, accumulator, bindings);
     inspectBundlerRegistration(source, node, accumulator, bindings);
@@ -251,23 +270,25 @@ const inspectNode = (
     node.source !== undefined &&
     !(t.isImportDeclaration(node) && isTypeOnlyImportDeclaration(node)) &&
     !(t.isExportAllDeclaration(node) && isTypeOnlyExportDeclaration(node))
-  )
+  ) {
     addReference(findings, {
       node,
       kind: "static-import",
       specifier: node.source.value,
+      ...(resolutionMode === undefined ? {} : { resolutionMode }),
     });
-  else if (
+  } else if (
     t.isExportNamedDeclaration(node) &&
     node.source != null &&
     !isTypeOnlyExportDeclaration(node)
-  )
+  ) {
     addReference(findings, {
       node,
       kind: "static-import",
       specifier: node.source.value,
+      ...(resolutionMode === undefined ? {} : { resolutionMode }),
     });
-  else if (t.isImportExpression(node))
+  } else if (t.isImportExpression(node))
     addReference(findings, {
       node,
       kind: "dynamic-import",
