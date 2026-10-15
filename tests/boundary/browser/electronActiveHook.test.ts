@@ -17,6 +17,9 @@ app.isReady = () => true;
 app.relaunch = () => undefined;
 app.setAsDefaultProtocolClient = () => true;
 app.setLoginItemSettings = () => undefined;
+app.moveToApplicationsFolder = () => {
+  throw new Error("moveToApplicationsFolder must stay blocked during capture");
+};
 const ipcMain = new EventEmitter();
 ipcMain.handlers = new Map();
 ipcMain.handle = (channel, listener) => ipcMain.handlers.set(channel, listener);
@@ -214,6 +217,44 @@ it("retains active hook evidence within its event-retention budget", async () =>
       expect.objectContaining({
         kind: "web-contents-lifecycle",
         event: "l".repeat(2048),
+      }),
+    ]),
+  );
+});
+
+it("blocks app.moveToApplicationsFolder as an app-lifecycle OS-integration effect", async () => {
+  const root = await createTestTempDirectory(
+    "rea-electron-hook-move-to-applications-",
+  );
+  temporary.push(root);
+  await writeFile(join(root, "electron.js"), electronModuleSource);
+  const script = join(root, "move.cjs");
+  await writeFile(
+    script,
+    `const electron = require("electron");
+const moved = electron.app.moveToApplicationsFolder();
+const snapshot = globalThis.__reaElectronActiveSnapshot();
+process.stdout.write(JSON.stringify({ moved, snapshot }) + "\\n");
+`,
+  );
+  const hook = join(process.cwd(), "scripts/electron-active-hook.cjs");
+  const execution = await runNode(hook, script, root, root);
+  expect(execution.code, execution.stderr).toBe(0);
+  const { moved, snapshot } = JSON.parse(
+    execution.stdout.trim().split("\n").at(-1) ?? "null",
+  ) as {
+    readonly moved: boolean;
+    readonly snapshot: {
+      readonly events: readonly Record<string, unknown>[];
+    };
+  };
+  expect(moved).toBe(false);
+  expect(snapshot.events).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        kind: "app-lifecycle",
+        event: "moveToApplicationsFolder",
+        phase: "blocked",
       }),
     ]),
   );
